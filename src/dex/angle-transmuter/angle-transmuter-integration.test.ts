@@ -13,9 +13,9 @@ import {
   checkConstantPoolPrices,
 } from '../../../tests/utils';
 import { Tokens } from '../../../tests/constants-e2e';
-import { AngleTransmuterEventPool } from './angle-transmuter-pool';
 import { Address } from '../../types';
 import { SmartTokenParams } from '../../../tests/smart-tokens';
+import { TransmuterSubscriber } from './transmuter';
 
 export type Collateral = { [stablecoin: string]: SmartTokenParams[] };
 
@@ -86,7 +86,7 @@ async function checkOnChainPricing(
   tokenOut: Address,
 ) {
   const exchangeAddress = getExchangeAddress(network, tokenIn, tokenOut);
-  const readerIface = AngleTransmuterEventPool.angleTransmuterIface;
+  const readerIface = TransmuterSubscriber.getTransmuterInterface(blockNumber);
 
   const readerCallData = getReaderCalldata(
     exchangeAddress,

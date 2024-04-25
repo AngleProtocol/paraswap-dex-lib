@@ -20,7 +20,6 @@ import {
   TransmuterParams,
   TransmuterState,
 } from './types';
-import TransmuterABI from '../../abi/angle-transmuter/Transmuter.json';
 import { Contract } from 'web3-eth-contract';
 import { TransmuterSubscriber } from './transmuter';
 import { PythSubscriber } from './pyth';
@@ -47,8 +46,6 @@ import { bigIntify } from '../../utils';
 import { MorphoVaultSubscriber } from './morphoVault';
 
 export class AngleTransmuterEventPool extends ComposedEventSubscriber<PoolState> {
-  public transmuter: Contract;
-  static angleTransmuterIface = new Interface(TransmuterABI);
   readonly config: PoolConfig;
 
   constructor(
@@ -172,12 +169,6 @@ export class AngleTransmuterEventPool extends ComposedEventSubscriber<PoolState>
         oracles: { chainlink: {}, pyth: {}, morphoVault: {} },
       },
     );
-
-    this.transmuter = new this.dexHelper.web3Provider.eth.Contract(
-      TransmuterABI as any,
-      config.transmuter,
-    );
-
     this.config = config;
   }
 
@@ -268,24 +259,23 @@ export class AngleTransmuterEventPool extends ComposedEventSubscriber<PoolState>
     blockNumber: number | 'latest',
     multiContract: Contract,
   ) {
+    const transmuterInterface =
+      TransmuterSubscriber.getTransmuterInterface(blockNumber);
     const tokensResult = (
       await multiContract.methods
         .aggregate([
           {
             target: transmuterAddress,
             callData:
-              TransmuterSubscriber.interface.encodeFunctionData(
-                'getCollateralList',
-              ),
+              transmuterInterface.encodeFunctionData('getCollateralList'),
           },
         ])
         .call({}, blockNumber)
     ).returnData;
-    const tokens: Address[] =
-      TransmuterSubscriber.interface.decodeFunctionResult(
-        'getCollateralList',
-        tokensResult[0],
-      )[0];
+    const tokens: Address[] = transmuterInterface.decodeFunctionResult(
+      'getCollateralList',
+      tokensResult[0],
+    )[0];
     // .map((t: any) => t.toLowerCase());
     return tokens;
   }
@@ -458,12 +448,11 @@ export class AngleTransmuterEventPool extends ComposedEventSubscriber<PoolState>
     blockNumber: number | 'latest',
     multiContract: Contract,
   ) {
+    const transmuterInterface =
+      TransmuterSubscriber.getTransmuterInterface(blockNumber);
     const getOracleConfigData = collaterals.map(collat => {
       return {
-        callData: TransmuterSubscriber.interface.encodeFunctionData(
-          'getOracle',
-          [collat],
-        ),
+        callData: transmuterInterface.encodeFunctionData('getOracle', [collat]),
         target: transmuterAddress,
       };
     });
@@ -474,8 +463,7 @@ export class AngleTransmuterEventPool extends ComposedEventSubscriber<PoolState>
     ).returnData;
 
     const oracleConfigs: DecodedOracleConfig[] = oracleConfigResult.map(
-      (p: any) =>
-        TransmuterSubscriber.interface.decodeFunctionResult('getOracle', p),
+      (p: any) => transmuterInterface.decodeFunctionResult('getOracle', p),
     );
 
     let chainlinkMap: ChainlinkConfig = {} as ChainlinkConfig;

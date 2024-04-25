@@ -12,6 +12,7 @@ import { BLOCK_UPGRADE_ORACLE, CBETH, RETH, SFRXETH, STETH } from './constants';
 import { Lens } from '../../lens';
 import { Interface } from '@ethersproject/abi';
 import TransmuterABI from '../../abi/angle-transmuter/Transmuter.json';
+import TransmuterOldABI from '../../abi/angle-transmuter/TransmuterOld.json';
 import {
   DecodedOracleConfig,
   Chainlink,
@@ -35,6 +36,7 @@ export class TransmuterSubscriber<State> extends PartialEventSubscriber<
   TransmuterState
 > {
   static readonly interface = new Interface(TransmuterABI);
+  static readonly interfaceOld = new Interface(TransmuterOldABI);
 
   constructor(
     private EURA: Address,
@@ -46,13 +48,26 @@ export class TransmuterSubscriber<State> extends PartialEventSubscriber<
     super([transmuter], lens, logger);
   }
 
+  static getTransmuterInterface(blockNumber?: number | 'latest'): Interface {
+    const processBlockNumber =
+      !blockNumber || blockNumber === 'latest'
+        ? BLOCK_UPGRADE_ORACLE + 1
+        : blockNumber;
+    return processBlockNumber >= BLOCK_UPGRADE_ORACLE
+      ? TransmuterSubscriber.interface
+      : TransmuterSubscriber.interfaceOld;
+  }
+
   public processLog(
     state: DeepReadonly<TransmuterState>,
     log: Readonly<Log>,
     blockHeader: Readonly<BlockHeader>,
   ): DeepReadonly<TransmuterState> | null {
     try {
-      const parsed = TransmuterSubscriber.interface.parseLog(log);
+      const transmuterInterface = TransmuterSubscriber.getTransmuterInterface(
+        blockHeader.number,
+      );
+      const parsed = transmuterInterface.parseLog(log);
       const _state: TransmuterState = _.cloneDeep(state) as TransmuterState;
       switch (parsed.name) {
         case 'FeesSet':
@@ -85,68 +100,67 @@ export class TransmuterSubscriber<State> extends PartialEventSubscriber<
   }
 
   public getGenerateStateMultiCallInputs(): MultiCallInput[] {
-    return [
+    const transmuterInterface =
+      TransmuterSubscriber.getTransmuterInterface(undefined);
+    const multicall = [
       ...this.collaterals.map(collat => ({
         target: this.transmuter,
-        callData: TransmuterSubscriber.interface.encodeFunctionData(
+        callData: transmuterInterface.encodeFunctionData(
           'getIssuedByCollateral',
           [collat],
         ),
       })),
       ...this.collaterals.map(collat => ({
         target: this.transmuter,
-        callData: TransmuterSubscriber.interface.encodeFunctionData(
-          'getOracle',
-          [collat],
-        ),
+        callData: transmuterInterface.encodeFunctionData('getOracle', [collat]),
       })),
       ...this.collaterals.map(collat => ({
         target: this.transmuter,
-        callData: TransmuterSubscriber.interface.encodeFunctionData(
+        callData: transmuterInterface.encodeFunctionData(
           'getCollateralMintFees',
           [collat],
         ),
       })),
       ...this.collaterals.map(collat => ({
         target: this.transmuter,
-        callData: TransmuterSubscriber.interface.encodeFunctionData(
+        callData: transmuterInterface.encodeFunctionData(
           'getCollateralBurnFees',
           [collat],
         ),
       })),
       ...this.collaterals.map(collat => ({
         target: this.transmuter,
-        callData: TransmuterSubscriber.interface.encodeFunctionData(
+        callData: transmuterInterface.encodeFunctionData(
           'isWhitelistedCollateral',
           [collat],
         ),
       })),
       ...this.collaterals.map(collat => ({
         target: this.transmuter,
-        callData: TransmuterSubscriber.interface.encodeFunctionData(
+        callData: transmuterInterface.encodeFunctionData(
           'getCollateralWhitelistData',
           [collat],
         ),
       })),
       {
         target: this.transmuter,
-        callData:
-          TransmuterSubscriber.interface.encodeFunctionData(
-            'getRedemptionFees',
-          ),
+        callData: transmuterInterface.encodeFunctionData('getRedemptionFees'),
       },
       {
         target: this.transmuter,
-        callData:
-          TransmuterSubscriber.interface.encodeFunctionData('getTotalIssued'),
+        callData: transmuterInterface.encodeFunctionData('getTotalIssued'),
       },
     ];
+
+    return multicall;
   }
 
   public generateState(
     multicallOutputs: MultiCallOutput[],
     blockNumber?: number | 'latest',
   ): DeepReadonly<TransmuterState> {
+    const transmuterInterface =
+      TransmuterSubscriber.getTransmuterInterface(blockNumber);
     const transmuterState = {
       collaterals: {} as {
         [token: string]: CollateralState;
@@ -173,25 +187,25 @@ export class TransmuterSubscriber<State> extends PartialEventSubscriber<
         (transmuterState.collaterals[collat] = {
           fees: {
             xFeeMint: (
-              TransmuterSubscriber.interface.decodeFunctionResult(
+              transmuterInterface.decodeFunctionResult(
                 'getCollateralMintFees',
                 multicallOutputs[indexMintFees * nbrCollaterals + i],
               )[0] as BigNumber[]
             ).map(f => Number.parseFloat(formatUnits(f, 9))),
             yFeeMint: (
-              TransmuterSubscriber.interface.decodeFunctionResult(
+              transmuterInterface.decodeFunctionResult(
                 'getCollateralMintFees',
                 multicallOutputs[indexMintFees * nbrCollaterals + i],
               )[1] as BigNumber[]
             ).map(f => Number.parseFloat(formatUnits(f, 9))),
             xFeeBurn: (
-              TransmuterSubscriber.interface.decodeFunctionResult(
+              transmuterInterface.decodeFunctionResult(
                 'getCollateralBurnFees',
                 multicallOutputs[indexBurnFees * nbrCollaterals + i],
               )[0] as BigNumber[]
             ).map(f => Number.parseFloat(formatUnits(f, 9))),
             yFeeBurn: (
-              TransmuterSubscriber.interface.decodeFunctionResult(
+              transmuterInterface.decodeFunctionResult(
                 'getCollateralBurnFees',
                 multicallOutputs[indexBurnFees * nbrCollaterals + i],
               )[1] as BigNumber[]
@@ -199,13 +213,14 @@ export class TransmuterSubscriber<State> extends PartialEventSubscriber<
           } as Fees,
           stablecoinsIssued: Number.parseFloat(
             formatUnits(
-              TransmuterSubscriber.interface.decodeFunctionResult(
+              transmuterInterface.decodeFunctionResult(
                 'getIssuedByCollateral',
                 multicallOutputs[indexStableIssued * nbrCollaterals + i],
               )[0],
               18,
             ),
           ),
+          // config: {} as Oracle,
           config: this._setOracleConfig(
             multicallOutputs[indexOracleFees * nbrCollaterals + i],
             blockNumber === undefined || blockNumber === 'latest'
@@ -213,11 +228,11 @@ export class TransmuterSubscriber<State> extends PartialEventSubscriber<
               : blockNumber,
           ),
           whitelist: {
-            status: TransmuterSubscriber.interface.decodeFunctionResult(
+            status: transmuterInterface.decodeFunctionResult(
               'isWhitelistedCollateral',
               multicallOutputs[indexWhitelistStatus * nbrCollaterals + i],
             )[0] as boolean,
-            data: TransmuterSubscriber.interface.decodeFunctionResult(
+            data: transmuterInterface.decodeFunctionResult(
               'getCollateralWhitelistData',
               multicallOutputs[indexWhitelistData * nbrCollaterals + i],
             )[0] as string,
@@ -225,20 +240,20 @@ export class TransmuterSubscriber<State> extends PartialEventSubscriber<
         }),
     );
     transmuterState.xRedemptionCurve = (
-      TransmuterSubscriber.interface.decodeFunctionResult(
+      transmuterInterface.decodeFunctionResult(
         'getRedemptionFees',
         multicallOutputs[multicallOutputs.length - 2],
       )[0] as BigNumber[]
     ).map(f => Number.parseFloat(formatUnits(f, 9)));
     transmuterState.yRedemptionCurve = (
-      TransmuterSubscriber.interface.decodeFunctionResult(
+      transmuterInterface.decodeFunctionResult(
         'getRedemptionFees',
         multicallOutputs[multicallOutputs.length - 2],
       )[1] as BigNumber[]
     ).map(f => Number.parseFloat(formatUnits(f, 9)));
     transmuterState.totalStablecoinIssued = Number.parseFloat(
       formatUnits(
-        TransmuterSubscriber.interface.decodeFunctionResult(
+        transmuterInterface.decodeFunctionResult(
           'getTotalIssued',
           multicallOutputs[multicallOutputs.length - 1],
         )[0],
